@@ -10,12 +10,10 @@ from urllib.parse import urljoin
 # --------------------------
 # 全体設定
 # --------------------------
-PRICE_URL = "https://cardrush.media/onepiece/buying_prices?displayMode=リスト&limit=2000&name=&rarity=&model_number=&amount=&page=1&sort%5Bkey%5D=amount&sort%5Border%5D=desc&associations%5B%5D=ocha_product&to_json_option%5Bexcept%5D%5B%5D=original_image_source&to_json_option%5Bexcept%5D%5B%5D=created_at&to_json_option%5Binclude%5D%5Bocha_product%5D%5Bonly%5D%5B%5D=id&to_json_option%5Binclude%5D%5Bocha_product%5D%5Bmethods%5D%5B%5D=image_source&display_category%5B%5D=最新弾&display_category%5B%5D=通常弾"
+# 価格スクレイピング関連のURLとファイルパスは削除
 
 # ディレクトリのパスをGitHub Actions実行環境に合わせて修正
 DATA_DIR = "./Card_Data/Onepeace_Cards/"
-HISTORY_FILE = os.path.join(DATA_DIR, "C.json")
-LATEST_PRICE_FILE = os.path.join(DATA_DIR, "latestprice.json")
 OFFICIAL_CARD_DATA_FILE = os.path.join(DATA_DIR, "cards.json")
 
 OFFICIAL_SITE_URL = "https://www.onepiece-cardgame.com/"
@@ -40,118 +38,6 @@ SERIES_MAP = {
     "550024": "ST-24", "550701": "FAMILY", "550901": "PR", "550801": "LIMITED",
     "550302": "PRB-02", "550301": "PRB-01", "550202": "EB-02", "550201": "EB-01"
 }
-
-# --------------------------
-# 価格スクレイピング関数
-# --------------------------
-def scrape_cardrush_prices():
-    """カードラッシュから買取価格をスクレイピングする。"""
-    try:
-        # User-Agentヘッダーを追加して、ブラウザからのリクエストに見せかける
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # headersパラメータをリクエストに追加
-        res = requests.get(PRICE_URL, headers=headers)
-        res.raise_for_status() # レスポンスのステータスコードを確認
-        
-        match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text, re.S)
-        data = json.loads(match.group(1))
-        cards = data["props"]["pageProps"]["buyingPrices"]
-        
-        scraped_data = []
-        for c in cards:
-            rarity = c.get("rarity", "")
-            color = c.get("element", "")
-            code = c.get("model_number", "")
-            
-            extras = []
-            if "未開封" in c.get("extra_difference", ""): extras.append("未開封")
-            if "CS" in c.get("extra_difference", ""): extras.append("チャンピオンシップ")
-            if "illust" in c.get("extra_difference", ""): extras.append("プロモ")
-            if "パラレル" in c.get("extra_difference", ""): extras.append("パラレル")
-            
-            price_id = f"{c['name']} 【{rarity}】"
-            for e in extras: price_id += f"【{e}】"
-            if color: price_id += f"【{color}】"
-            if code: price_id += f"【{code}】"
-            
-            scraped_data.append({"priceid": price_id, "price": c["amount"]})
-        
-        return scraped_data
-    except (requests.RequestException, json.JSONDecodeError, IndexError) as e:
-        print(f"❌ 価格のスクレイピングに失敗しました: {e}")
-        return None
-
-
-def update_price_history(scraped_data):
-    """日次の価格履歴ファイル (C.json) を更新する。"""
-    if not scraped_data:
-        return
-
-    history_data = []
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
-
-    merged_history = {}
-    for item in history_data:
-        pid = item["priceid"]
-        prices = item["price"]
-        if isinstance(prices, int):
-            merged_history[pid] = [{"date": TODAY, "value": prices}]
-        elif isinstance(prices, list) and all(isinstance(p, dict) and "date" in p and "value" in p for p in prices):
-            merged_history[pid] = prices
-        else:
-            merged_history[pid] = []
-
-    for item in scraped_data:
-        pid = item["priceid"]
-        price = item["price"]
-        
-        if pid not in merged_history:
-            merged_history[pid] = [{"date": TODAY, "value": price}]
-        else:
-            existing_today = next((p for p in merged_history[pid] if p["date"] == TODAY), None)
-            if existing_today:
-                existing_today["value"] = price
-            else:
-                merged_history[pid].append({"date": TODAY, "value": price})
-
-    result = [{"priceid": pid, "price": prices} for pid, prices in merged_history.items()]
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"✅ 日次履歴を更新しました: {HISTORY_FILE}")
-
-def generate_latest_price_file(merged_data):
-    """最新価格ファイル (latestprice.json) を生成する。"""
-    if not merged_data:
-        print("最新価格を生成するデータがありません。")
-        return
-
-    latest_result = []
-    for item in merged_data:
-        pid = item["priceid"]
-        prices = item["price"]
-        if not prices:
-            continue
-        
-        sorted_prices = sorted(prices, key=lambda x: x["date"])
-        oldest = sorted_prices[0]["value"]
-        newest = sorted_prices[-1]["value"]
-        diff = newest - oldest
-        stats_str = f"{diff:+d}"
-        
-        latest_result.append({
-            "priceid": pid,
-            "price": newest,
-            "stats": stats_str
-        })
-    
-    with open(LATEST_PRICE_FILE, "w", encoding="utf-8") as f:
-        json.dump(latest_result, f, ensure_ascii=False, indent=2)
-    print(f"✅ 最新価格を出力しました: {LATEST_PRICE_FILE}")
 
 # --------------------------
 # 公式カードデータスクレイピング関数
@@ -276,17 +162,7 @@ def update_card_ids(file_path):
 # メインの実行
 # --------------------------
 def main():
-    """両方のスクレイピングタスクを実行するメイン関数。"""
-    print("--- 💸 価格情報の更新を開始します ---")
-    scraped_prices = scrape_cardrush_prices()
-    if scraped_prices:
-        update_price_history(scraped_prices)
-        
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                updated_history = json.load(f)
-            generate_latest_price_file(updated_history)
-        
+    """公式カード情報のスクレイピングタスクを実行するメイン関数。"""
     print("\n--- 📖 公式カード情報の更新を開始します ---")
     scrape_official_card_data()
     
