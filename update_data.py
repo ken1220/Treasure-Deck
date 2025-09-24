@@ -47,8 +47,15 @@ SERIES_MAP = {
 def scrape_cardrush_prices():
     """カードラッシュから買取価格をスクレイピングする。"""
     try:
-        res = requests.get(PRICE_URL)
-        res.raise_for_status()
+        # User-Agentヘッダーを追加して、ブラウザからのリクエストに見せかける
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # headersパラメータをリクエストに追加
+        res = requests.get(PRICE_URL, headers=headers)
+        res.raise_for_status() # レスポンスのステータスコードを確認
+        
         match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text, re.S)
         data = json.loads(match.group(1))
         cards = data["props"]["pageProps"]["buyingPrices"]
@@ -61,9 +68,9 @@ def scrape_cardrush_prices():
             
             extras = []
             if "未開封" in c.get("extra_difference", ""): extras.append("未開封")
-            if "CS" in c.get("extra_difference", ""): extras.append("チャンピオンシップ")
-            if "illust" in c.get("extra_difference", ""): extras.append("プロモ")
-            if "パラレル" in c.get("extra_difference", ""): extras.append("パラレル")
+            if "CS" in c.get("extra_difference", ""): extras.append("チャンピオンシップ")
+            if "illust" in c.get("extra_difference", ""): extras.append("プロモ")
+            if "パラレル" in c.get("extra_difference", ""): extras.append("パラレル")
             
             price_id = f"{c['name']} 【{rarity}】"
             for e in extras: price_id += f"【{e}】"
@@ -76,6 +83,7 @@ def scrape_cardrush_prices():
     except (requests.RequestException, json.JSONDecodeError, IndexError) as e:
         print(f"❌ 価格のスクレイピングに失敗しました: {e}")
         return None
+
 
 def update_price_history(scraped_data):
     """日次の価格履歴ファイル (C.json) を更新する。"""
