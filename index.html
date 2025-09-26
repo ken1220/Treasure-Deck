@@ -256,10 +256,11 @@ placeholder="名前 / コードで検索" style="flex:1; padding-right:30px;">
             <option value="rarity_desc">レアリティ (低→高)</option>
         </select>
     </div>
+
     <div class="display-toggle-container">
       <div class="display-toggle-left">
         <button id="gridBtn" class="display-toggle-btn">Grid</button>
-        <button id="listBtn" class="display-toggle-btn">List</button>
+        <button id="listBtn" class="display-toggle-btn active">List</button>
       </div>
       <button id="allBtn" class="display-toggle-btn active">All</button>
       <button id="ownedBtn">Collected</button>
@@ -359,20 +360,34 @@ src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.
 js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+// =========================================================================
+// 定数定義 (保守性向上のため、重要な値はここに集約)
+// =========================================================================
+const RARITY_ORDER = ["L", "SEC", "SR", "R", "UC", "C", "P", "SP", "LEADER", "DON!!"];
+const SERIES_ORDER = ["EB01", "EB02", "EB03", "EB04", "EB05"];
+const COLOR_MAP = { "赤": "#f44336", "Red": "#f44336", "青": "#2196f3", "Blue": "#2196f3", "緑": "#4caf50", "Green": "#4caf50", "黄": "#ffeb3b", "Yellow": "#ffeb3b", "紫": "#9c27b0", "Purple": "#9c27b0" };
+
+// =========================================================================
+// グローバル変数
+// =========================================================================
 let allCards = { normal: [], don: [] }, cards = [], currentType = "normal", displayMode = "list";
 let showOwnedOnly = false;
 let showUnownedOnly = false;
-let currentSort = "default"; // 👈 ソートの状態変数を追加
-const rarityOrder = ["L", "SEC", "SR", "R", "UC", "C", "P", "SP", "LEADER", "DON!!"]; // 👈 レアリティ順序を定義
-const colorMap = { "赤": "#f44336", "Red": "#f44336", "青": "#2196f3", "Blue": "#2196f3", "緑": "#4caf50", "Green": "#4caf50", "黄": "#ffeb3b", "Yellow": "#ffeb3b", "紫": "#9c27b0", "Purple": "#9c27b0" };
+let currentSort = "default";
 let debugMode = false;
 let confirmOwnedRemoval = true;
 
-let bMap = {};
-let cMap = {};
-let latestMap = {};
+let bMap = {}; // id0 -> priceid
+let cMap = {}; // priceid -> history
+let latestMap = {}; // priceid -> latest price
 
-function getUniqueKey(card) { return currentType + "_" + card.code + "_" + card.parallel + "_" + (Array.isArray(card.color) ? card.color.join("/") : card.color) + "_" + card.image_url; }
+// =========================================================================
+// ヘルパー関数 (Owned状態とレアリティ順序)
+// =========================================================================
+function getUniqueKey(card) { 
+    const typePrefix = currentType === "normal" ? "normal" : "don";
+    return typePrefix + "_" + card.code + "_" + card.parallel + "_" + (Array.isArray(card.color) ? card.color.join("/") : card.color) + "_" + card.image_url; 
+}
 function isOwned(card) { return localStorage.getItem(getUniqueKey(card)) === "true"; }
 function toggleOwned(card) {
     if (isOwned(card) && confirmOwnedRemoval) {
@@ -383,12 +398,12 @@ function toggleOwned(card) {
 }
 
 function getRarityIndex(rarity) {
-    // 存在しないレアリティは最後に配置するため大きな値を返す
-    return rarityOrder.indexOf(rarity) !== -1 ? rarityOrder.indexOf(rarity) : 99;
+    return RARITY_ORDER.indexOf(rarity) !== -1 ? RARITY_ORDER.indexOf(rarity) : 99;
 }
 
-// 修正後のロジックでは、uniqueByCardは不要なためコメントアウトするか、無視します。
-
+// =========================================================================
+// UI構築
+// =========================================================================
 function createCheckbox(container, value, labelText, color) {
     const label = document.createElement("label");
     label.innerHTML = `<input type="checkbox" value="${value}"><span>${labelText}</span>`;
@@ -407,10 +422,10 @@ function populateSeriesFilterUI() {
     container.innerHTML = "";
     const seriesSet = new Set(cards.map(c => c.code.split("-")[0]));
     const seriesArray = Array.from(seriesSet);
-    const order = ["EB01", "EB02", "EB03", "EB04", "EB05"];
+    
     seriesArray.sort((a, b) => {
-        const iA = order.indexOf(a);
-        const iB = order.indexOf(b);
+        const iA = SERIES_ORDER.indexOf(a);
+        const iB = SERIES_ORDER.indexOf(b);
         if (iA !== -1 && iB !== -1) return iA - iB;
         if (iA !== -1) return -1;
         if (iB !== -1) return 1;
@@ -419,16 +434,26 @@ function populateSeriesFilterUI() {
     seriesArray.forEach(s => createCheckbox(container, s, s));
 }
 
-function populateColorFilterUI() { const c = document.getElementById("colorFilterGroup"); c.innerHTML = ""; new Set(cards.flatMap(c => Array.isArray(c.color) ? c.color : [c.color])).forEach(cl => createCheckbox(c, cl, cl, colorMap[cl] || "#666")); }
-function populateRarityFilterUI() { const order = ["SEC", "SR", "R", "L", "UC", "C", "SP", "P", "LEADER", "DON!!"], c = document.getElementById("rarityFilterGroup"); c.innerHTML = ""; const rSet = new Set(cards.map(c => c.rarity).filter(r => r)); order.forEach(r => { if (rSet.has(r)) createCheckbox(c, r, r); }); }
-function populateAttributeFilterUI() { const c = document.getElementById("attributeFilterGroup"); c.innerHTML = ""; new Set(cards.map(c => c.attribute).filter(a => a)).forEach(a => createCheckbox(c, a, a)); }
+function populateColorFilterUI() { 
+    const c = document.getElementById("colorFilterGroup"); c.innerHTML = ""; 
+    const colorSet = new Set(cards.flatMap(c => Array.isArray(c.color) ? c.color : [c.color]).filter(Boolean));
+    colorSet.forEach(cl => createCheckbox(c, cl, cl, COLOR_MAP[cl] || "#666")); 
+}
+function populateRarityFilterUI() { 
+    const c = document.getElementById("rarityFilterGroup"); c.innerHTML = ""; 
+    const rSet = new Set(cards.map(c => c.rarity).filter(r => r)); 
+    RARITY_ORDER.forEach(r => { if (rSet.has(r)) createCheckbox(c, r, r); }); 
+}
+function populateAttributeFilterUI() { 
+    const c = document.getElementById("attributeFilterGroup"); c.innerHTML = ""; 
+    const aSet = new Set(cards.map(c => c.attribute).filter(a => a));
+    aSet.forEach(a => createCheckbox(c, a, a)); 
+}
 
 function populateParallelFilterUI() {
     const container = document.getElementById("parallelFilterGroup");
     container.innerHTML = "";
-    // 「通常」ボタンを生成
     createCheckbox(container, "normal", "通常");
-    // 「パラレル」ボタンを生成
     createCheckbox(container, "parallel", "パラレル");
 }
 
@@ -445,6 +470,9 @@ function updateActiveFilters() {
     });
 }
 
+// =========================================================================
+// フィルタリングとソートのメインロジック
+// =========================================================================
 function filterCards() {
     const series = Array.from(document.querySelectorAll("#seriesFilterGroup input:checked")).map(c => c.value);
     const colors = Array.from(document.querySelectorAll("#colorFilterGroup input:checked")).map(c => c.value);
@@ -455,9 +483,20 @@ function filterCards() {
 
     const filtered = cards.filter(c => {
         if (series.length > 0 && !series.includes(c.code.split("-")[0])) return false;
-        if (colors.length > 0 && !(c.color && colors.every(cl => Array.isArray(c.color) ? c.color.includes(cl) : c.color === cl))) return false;
+        
+        // 色のフィルタリング (OR条件に修正)
+        if (colors.length > 0) {
+            const cardColors = Array.isArray(c.color) ? c.color : [c.color].filter(Boolean);
+            if (!colors.some(filterColor => cardColors.includes(filterColor))) return false;
+        }
+
         if (rarities.length > 0 && !rarities.includes(c.rarity)) return false;
-        if (attributes.length > 0 && !attributes.includes(c.attribute)) return false;
+        
+        // 属性のフィルタリング (OR条件に修正)
+        if (attributes.length > 0) {
+            const cardAttributes = Array.isArray(c.attribute) ? c.attribute : [c.attribute].filter(Boolean);
+            if (!attributes.some(filterAttr => cardAttributes.includes(filterAttr))) return false;
+        }
         
         if (parallels.length > 0) {
             const isNormal = parallels.includes("normal");
@@ -467,8 +506,6 @@ function filterCards() {
                 if (c.parallel !== "normal") return false;
             } else if (!isNormal && isParallel) {
                 if (c.parallel === "normal") return false;
-            } else if (isNormal && isParallel) {
-                // 両方選択されている場合は、すべてのカードを表示
             }
         }
         
@@ -480,40 +517,36 @@ function filterCards() {
         return true;
     });
 
-    // 👇 ソートロジックの追加 👇
+    // ソート処理
     filtered.sort((a, b) => {
         if (currentSort === "default" || currentSort === "code_asc") {
-            // コード昇順
             return a.code.localeCompare(b.code);
         } else if (currentSort === "code_desc") {
-            // コード降順
             return b.code.localeCompare(a.code);
         } else if (currentSort === "rarity_asc") {
-            // レアリティ (高→低)
             const indexA = getRarityIndex(a.rarity);
             const indexB = getRarityIndex(b.rarity);
             if (indexA !== indexB) {
                 return indexA - indexB;
             }
-            // レアリティが同じ場合はコード昇順で安定ソート
             return a.code.localeCompare(b.code);
         } else if (currentSort === "rarity_desc") {
-            // レアリティ (低→高)
             const indexA = getRarityIndex(a.rarity);
             const indexB = getRarityIndex(b.rarity);
             if (indexA !== indexB) {
                 return indexB - indexA;
             }
-            // レアリティが同じ場合はコード昇順で安定ソート
             return a.code.localeCompare(b.code);
         }
         return 0;
     });
 
-    // uniqueByCard(filtered) の呼び出しを削除し、重複カードも表示されるように修正
     return filtered;
 }
 
+// =========================================================================
+// カード表示の更新
+// =========================================================================
 function updateOwnedCount(filteredCards) {
     const owned = filteredCards.filter(isOwned).length;
     const total = filteredCards.length;
@@ -566,7 +599,7 @@ function renderCards(filtered) {
         } else {
             let rawColors = Array.isArray(c.color) ? c.color : [c.color];
             rawColors = rawColors.filter(Boolean);
-            let barColors = rawColors.length > 0 ? rawColors.map(cl => colorMap[cl] || "#666") : ["#666"];
+            let barColors = rawColors.length > 0 ? rawColors.map(cl => COLOR_MAP[cl] || "#666") : ["#666"];
             let barStyle = barColors.length > 1 ? `background: linear-gradient(to bottom, ${barColors.join(",")});` : `background: ${barColors[0]};`;
 
             div.innerHTML = `<div class="card-content">
@@ -604,8 +637,8 @@ function setCards(type) {
     document.getElementById("searchInput").value = ""; 
     showOwnedOnly = false;
     showUnownedOnly = false;
-    currentSort = "default"; // カードタイプ切り替え時にソートをリセット
-    document.getElementById("sortSelector").value = "default"; // UIをリセット
+    currentSort = "default";
+    document.getElementById("sortSelector").value = "default"; 
 
     document.getElementById("allBtn").classList.add("active");
     document.getElementById("ownedBtn").classList.remove("active");
@@ -615,7 +648,9 @@ function setCards(type) {
     updateActiveFilters(); renderCards(filterCards());
 }
 
-// データ読み込み
+// =========================================================================
+// データ読み込みとイベントリスナー
+// =========================================================================
 Promise.all([
     fetch("Card_Data/Onepeace_Cards/cards.json").then(r => r.json()),
     fetch("Card_Data/Onepeace_Cards/don_cards.json").then(r => r.ok ? r.json() : []).catch(() => []),
@@ -633,16 +668,25 @@ Promise.all([
     setCards("normal");
 });
 
-// イベント
-
 document.getElementById("sortSelector").addEventListener("change", (e) => {
     currentSort = e.target.value;
     renderCards(filterCards());
 });
 
 document.getElementById("typeFilter").addEventListener("change", e => setCards(e.target.value));
-document.getElementById("gridBtn").addEventListener("click", () => { displayMode = "grid"; renderCards(filterCards()); });
-document.getElementById("listBtn").addEventListener("click", () => { displayMode = "list"; renderCards(filterCards()); });
+
+document.getElementById("gridBtn").addEventListener("click", () => { 
+    displayMode = "grid"; 
+    document.getElementById("gridBtn").classList.add("active");
+    document.getElementById("listBtn").classList.remove("active");
+    renderCards(filterCards()); 
+});
+document.getElementById("listBtn").addEventListener("click", () => { 
+    displayMode = "list"; 
+    document.getElementById("listBtn").classList.add("active");
+    document.getElementById("gridBtn").classList.remove("active");
+    renderCards(filterCards()); 
+});
 
 document.getElementById("allBtn").addEventListener("click", () => {
     showOwnedOnly = false;
@@ -716,7 +760,7 @@ function buildRarityStats() {
   const tbody = document.querySelector('#rarityTable tbody');
   tbody.innerHTML = '';
 
-  const order = ["SEC","SR","R","L","UC","C","SP","P","LEADER","DON!!","未分類"];
+  const order = [...RARITY_ORDER, "未分類"];
   const totalCards = Object.values(rarityCounts).reduce((a,b)=>a+b,0);
   const totalOwned = Object.keys(rarityCounts).reduce((acc,r)=>acc+(rarityOwned[r]||0),0);
 
@@ -798,6 +842,12 @@ document.getElementById('statsBtn').addEventListener('click', () => {
 });
 
 const searchInputEl = document.getElementById("searchInput");
+
+// 検索の自動更新 (inputイベント)
+searchInputEl.addEventListener("input", () => {
+    renderCards(filterCards());
+    updateActiveFilters();
+});
 
 searchInputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
